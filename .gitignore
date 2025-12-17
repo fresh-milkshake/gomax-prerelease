@@ -1,0 +1,33 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Cache and session files
+cache/
+*.db
+*.log
+
+# Test output
+test_output.txt
+test_result.txt
+
+# OS files
+.DS_Store
+Thumbs.db
+TODO.md
