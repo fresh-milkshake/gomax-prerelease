@@ -209,6 +209,12 @@ func (c *MaxClient) Start(ctx context.Context) error {
 		return err
 	}
 
+	select {
+	case <-time.After(100 * time.Millisecond):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
 	if c.token == "" {
 		if c.cfg.Registration {
 			c.logger.Info("Starting registration flow")

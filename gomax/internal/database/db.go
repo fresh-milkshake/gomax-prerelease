@@ -3,6 +3,8 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
@@ -17,7 +19,10 @@ type DB struct {
 // Открывает или создаёт файл базы session.db в указанной рабочей директории
 // и выполняет миграции схемы.
 func Open(workdir string) (*DB, error) {
-	path := fmt.Sprintf("%s/session.db", workdir)
+	if err := os.MkdirAll(workdir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create work directory: %w", err)
+	}
+	path := filepath.Join(workdir, "session.db")
 	conn, err := sql.Open("sqlite3", path)
 	if err != nil {
 		return nil, err

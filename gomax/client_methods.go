@@ -33,12 +33,18 @@ func (c *MaxClient) RequestCode(ctx context.Context, phone string, language stri
 		return "", err
 	}
 
+	c.logger.Debug("Requesting auth code", "phone", phone, "language", language, "payload", payloadMap)
+
 	resp, err := c.sendAndWaitResponse(ctx, enums.OpcodeAuthRequest, payloadMap)
 	if err != nil {
+		c.logger.Error("RequestCode sendAndWaitResponse failed", "err", err)
 		return "", err
 	}
 
+	c.logger.Debug("RequestCode response received", "resp", resp)
+
 	if err := HandleError(resp); err != nil {
+		c.logger.Error("RequestCode HandleError failed", "err", err, "response", resp)
 		return "", err
 	}
 
