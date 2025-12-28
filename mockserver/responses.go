@@ -222,6 +222,55 @@ func RemoveReactionResponse(seq int) map[string]any {
 	}
 }
 
+// GetQRResponse создаёт ответ на GET_QR.
+func GetQRResponse(seq int, trackID string, link string, pollInterval int, expiresAt int64) map[string]any {
+	return map[string]any{
+		"ver":    ProtocolVersion,
+		"cmd":    ProtocolCommand,
+		"seq":    seq,
+		"opcode": OpcodeGetQR,
+		"payload": map[string]any{
+			"trackId":         trackID,
+			"qrLink":          link,
+			"pollingInterval": pollInterval,
+			"expiresAt":       expiresAt,
+		},
+	}
+}
+
+// GetQRStatusResponse создаёт ответ на GET_QR_STATUS.
+func GetQRStatusResponse(seq int, loginAvailable bool, expiresAt int64) map[string]any {
+	return map[string]any{
+		"ver":    ProtocolVersion,
+		"cmd":    ProtocolCommand,
+		"seq":    seq,
+		"opcode": OpcodeGetQRStatus,
+		"payload": map[string]any{
+			"status": map[string]any{
+				"loginAvailable": loginAvailable,
+				"expiresAt":      expiresAt,
+			},
+		},
+	}
+}
+
+// LoginByQRResponse создаёт ответ на LOGIN_BY_QR.
+func LoginByQRResponse(seq int, loginToken string) map[string]any {
+	return map[string]any{
+		"ver":    ProtocolVersion,
+		"cmd":    ProtocolCommand,
+		"seq":    seq,
+		"opcode": OpcodeLoginByQR,
+		"payload": map[string]any{
+			"tokenAttrs": map[string]any{
+				TokenTypeLogin: map[string]any{
+					"token": loginToken,
+				},
+			},
+		},
+	}
+}
+
 // GetReactionsResponse создаёт ответ на MSG_GET_REACTIONS.
 func GetReactionsResponse(seq int, messagesReactions map[string]any) map[string]any {
 	if messagesReactions == nil {

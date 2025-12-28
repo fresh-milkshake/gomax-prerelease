@@ -8,4 +8,5 @@ const (
 	AuthTypeStartAuth AuthType = "START_AUTH"
 	AuthTypeCheckCode AuthType = "CHECK_CODE"
 	AuthTypeRegister  AuthType = "REGISTER"
+	AuthTypeResend    AuthType = "RESEND"
 )

@@ -42,4 +42,9 @@ const (
 	OpcodeNotifContact             = 131
 	OpcodeNotifMsgDelete           = 142
 	OpcodeNotifMsgReactionsChanged = 155
+
+	// QR login opcodes
+	OpcodeGetQR       = 288
+	OpcodeGetQRStatus = 289
+	OpcodeLoginByQR   = 291
 )

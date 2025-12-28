@@ -12,6 +12,7 @@ import (
 	"github.com/fresh-milkshake/gomax/filters"
 	"github.com/fresh-milkshake/gomax/internal/constants"
 	"github.com/fresh-milkshake/gomax/internal/database"
+	"github.com/fresh-milkshake/gomax/internal/payloads"
 	"github.com/fresh-milkshake/gomax/internal/utils"
 	"github.com/fresh-milkshake/gomax/logger"
 	"github.com/fresh-milkshake/gomax/types"
@@ -38,6 +39,7 @@ type ClientConfig struct {
 	Reconnect         bool
 	ReconnectDelay    time.Duration
 	SendFakeTelemetry bool
+	UserAgent         UserAgent
 	Registration      bool
 	FirstName         string
 	LastName          *string
@@ -85,6 +87,11 @@ type MaxClient struct {
 	incoming chan map[string]any
 	outgoing chan map[string]any
 
+	telemetryMu   sync.Mutex
+	sessionID     int
+	actionID      int
+	currentScreen int
+
 	bgWG     sync.WaitGroup
 	bgCancel context.CancelFunc
 
@@ -103,6 +110,22 @@ type MaxClient struct {
 
 	fileUploadWaitersMu sync.Mutex
 	fileUploadWaiters   map[int64]chan map[string]any
+}
+
+// UserAgent задаёт параметры клиентского окружения,
+// отправляемые в SESSION_INIT и SYNC (аналог PyMax UserAgentPayload).
+type UserAgent struct {
+	DeviceType      string
+	Locale          string
+	DeviceLocale    string
+	OSVersion       string
+	DeviceName      string
+	HeaderUserAgent string
+	AppVersion      string
+	Screen          string
+	Timezone        string
+	ClientSessionID int
+	BuildNumber     int
 }
 
 // Создаёт новый экземпляр MaxClient с указанной конфигурацией
@@ -135,7 +158,6 @@ func NewMaxClient(cfg ClientConfig) (*MaxClient, error) {
 	if !constants.PhoneRegex.MatchString(cfg.Phone) {
 		return nil, &InvalidPhoneError{Phone: cfg.Phone}
 	}
-
 	db, err := database.Open(cfg.WorkDir)
 	if err != nil {
 		return nil, err
@@ -146,12 +168,21 @@ func NewMaxClient(cfg ClientConfig) (*MaxClient, error) {
 		_ = db.Close()
 		return nil, err
 	}
+
 	token := cfg.Token
 	if token == "" {
 		if t, err := db.AuthToken(); err == nil {
 			token = t
 		}
 	}
+
+	storedDeviceType, _ := db.DeviceType()
+	if cfg.UserAgent.DeviceType == "" {
+		if token != "" && storedDeviceType != "" {
+			cfg.UserAgent.DeviceType = storedDeviceType
+		}
+	}
+	fillUserAgentDefaults(&cfg.UserAgent)
 
 	clientLogger := cfg.Logger
 	if clientLogger == nil {
@@ -173,6 +204,9 @@ func NewMaxClient(cfg ClientConfig) (*MaxClient, error) {
 		incoming:          make(chan map[string]any, 128),
 		outgoing:          make(chan map[string]any, 128),
 		fileUploadWaiters: make(map[int64]chan map[string]any),
+		sessionID:         int(time.Now().UnixMilli()),
+		actionID:          1,
+		currentScreen:     150,
 	}, nil
 }
 
@@ -287,6 +321,12 @@ func (c *MaxClient) Start(ctx context.Context) error {
 	}
 
 	c.logger.Info("Client started successfully")
+
+	if c.cfg.SendFakeTelemetry {
+		c.bgWG.Add(1)
+		go c.telemetryLoop(ctx)
+	}
+
 	for _, h := range c.onStartHandlers {
 		h(ctx)
 	}
@@ -334,11 +374,90 @@ func (c *MaxClient) Close() error {
 	return nil
 }
 
+// Собирает userAgent payload для handshake и SYNC.
+func (c *MaxClient) userAgentPayload() payloads.UserAgentPayload {
+	ua := c.cfg.UserAgent
+	return payloads.UserAgentPayload{
+		DeviceType:      ua.DeviceType,
+		Locale:          ua.Locale,
+		DeviceLocale:    ua.DeviceLocale,
+		OSVersion:       ua.OSVersion,
+		DeviceName:      ua.DeviceName,
+		HeaderUserAgent: ua.HeaderUserAgent,
+		AppVersion:      ua.AppVersion,
+		Screen:          ua.Screen,
+		Timezone:        ua.Timezone,
+		ClientSessionID: ua.ClientSessionID,
+		BuildNumber:     ua.BuildNumber,
+	}
+}
+
+// Устанавливает значения userAgent по умолчанию, если они не заданы.
+func fillUserAgentDefaults(ua *UserAgent) {
+	if ua.DeviceType == "" {
+		ua.DeviceType = constants.DefaultDeviceType
+	}
+	if ua.Locale == "" {
+		ua.Locale = constants.DefaultLocale
+	}
+	if ua.DeviceLocale == "" {
+		ua.DeviceLocale = constants.DefaultDeviceLocale
+	}
+	if ua.OSVersion == "" {
+		ua.OSVersion = constants.DefaultOSVersion
+	}
+	if ua.DeviceName == "" {
+		ua.DeviceName = constants.DefaultDeviceName
+	}
+	if ua.HeaderUserAgent == "" {
+		ua.HeaderUserAgent = constants.DefaultUserAgent
+	}
+	if ua.AppVersion == "" {
+		ua.AppVersion = constants.DefaultAppVersion
+	}
+	if ua.Screen == "" {
+		ua.Screen = constants.DefaultScreen
+	}
+	if ua.Timezone == "" {
+		ua.Timezone = constants.DefaultTimezone
+	}
+	if ua.ClientSessionID == 0 {
+		ua.ClientSessionID = constants.DefaultClientSessionID
+	}
+	if ua.BuildNumber == 0 {
+		ua.BuildNumber = constants.DefaultBuildNumber
+	}
+}
+
 func (c *MaxClient) nextSeq() int {
 	c.seqMu.Lock()
 	defer c.seqMu.Unlock()
 	c.seq++
 	return c.seq
+}
+
+func (c *MaxClient) resetTelemetrySession() {
+	c.telemetryMu.Lock()
+	defer c.telemetryMu.Unlock()
+	c.sessionID = int(time.Now().UnixMilli())
+	c.actionID = 1
+	c.currentScreen = navigationScreens[0]
+}
+
+// Отправляет сообщение без ожидания ответа (fire-and-forget).
+func (c *MaxClient) sendAsync(ctx context.Context, opcode enums.Opcode, payload map[string]any) {
+	msg := map[string]any{
+		"ver":     constants.ProtocolVersion,
+		"cmd":     constants.ProtocolCommand,
+		"seq":     c.nextSeq(),
+		"opcode":  int(opcode),
+		"payload": payload,
+	}
+
+	select {
+	case c.outgoing <- msg:
+	case <-ctx.Done():
+	}
 }
 
 // Устанавливает WebSocket‑соединение (только dial, без SESSION_INIT).
@@ -351,7 +470,7 @@ func (c *MaxClient) dialWebSocket(ctx context.Context) error {
 
 	header := make(http.Header)
 	header.Set("Origin", constants.WebsocketOrigin)
-	header.Set("User-Agent", constants.DefaultUserAgent)
+	header.Set("User-Agent", c.cfg.UserAgent.HeaderUserAgent)
 
 	ws, _, err := dialer.DialContext(ctx, c.cfg.URI, header)
 	if err != nil {
@@ -370,12 +489,14 @@ func (c *MaxClient) dialWebSocket(ctx context.Context) error {
 // Выполняет SESSION_INIT handshake.
 func (c *MaxClient) sessionInit(ctx context.Context) error {
 	c.logger.Debug("Sending SESSION_INIT")
+	uaMap, err := utils.ToMap(c.userAgentPayload())
+	if err != nil {
+		return err
+	}
+
 	if err := c.sendAndWait(ctx, enums.OpcodeSessionInit, map[string]any{
-		"deviceId": c.deviceID.String(),
-		"userAgent": map[string]any{
-			"appVersion": constants.DefaultAppVersion,
-			"deviceType": constants.DefaultDeviceType,
-		},
+		"deviceId":  c.deviceID.String(),
+		"userAgent": uaMap,
 	}); err != nil {
 		c.logger.Error("SESSION_INIT failed", "err", err)
 		return err
@@ -389,6 +510,11 @@ func (c *MaxClient) sessionInit(ctx context.Context) error {
 // Возвращает ошибку, если токен невалидный (например, login.token), чтобы можно было выполнить повторный логин.
 func (c *MaxClient) sync(ctx context.Context) error {
 	c.logger.Debug("Sending SYNC")
+	uaMap, err := utils.ToMap(c.userAgentPayload())
+	if err != nil {
+		return err
+	}
+
 	resp, err := c.sendAndWaitResponse(ctx, enums.OpcodeLogin, map[string]any{
 		"interactive":  true,
 		"token":        c.token,
@@ -397,6 +523,7 @@ func (c *MaxClient) sync(ctx context.Context) error {
 		"presenceSync": 0,
 		"draftsSync":   0,
 		"chatsCount":   40,
+		"userAgent":    uaMap,
 	})
 	if err != nil {
 		c.logger.Error("SYNC failed", "err", err)
@@ -451,6 +578,13 @@ func (c *MaxClient) reconnect(ctx context.Context) error {
 		}
 		c.connMu.Unlock()
 		return fmt.Errorf("session init failed: %w", err)
+	}
+
+	c.resetTelemetrySession()
+	if c.cfg.SendFakeTelemetry {
+		if err := c.sendColdStart(ctx); err != nil {
+			c.logger.Debug("Cold start telemetry failed after reconnect", "err", err)
+		}
 	}
 
 	if c.token == "" {

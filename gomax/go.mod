@@ -8,6 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-sqlite3 v1.14.22
+	github.com/mdp/qrterminal/v3 v3.0.0
 	github.com/stretchr/testify v1.11.1
 )
 
@@ -30,6 +31,7 @@ require (
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d // indirect
 	golang.org/x/sys v0.30.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	rsc.io/qr v0.2.0 // indirect
 )
 
 replace github.com/fresh-milkshake/gomax/mockserver => ../mockserver

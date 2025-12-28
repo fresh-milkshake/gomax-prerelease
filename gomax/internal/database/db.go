@@ -116,10 +116,22 @@ func (d *DB) DeviceID() (uuid.UUID, error) {
 	return parsedUUID, nil
 }
 
+// Возвращает сохранённый тип устройства, если он есть.
+func (d *DB) DeviceType() (string, error) {
+	var deviceType sql.NullString
+	if err := d.db.QueryRow(`SELECT device_type FROM auth LIMIT 1`).Scan(&deviceType); err != nil {
+		return "", err
+	}
+	if !deviceType.Valid {
+		return "", nil
+	}
+	return deviceType.String, nil
+}
+
 // Обновляет токен авторизации для указанного устройства в базе данных.
-func (d *DB) UpdateToken(deviceID uuid.UUID, token string) error {
-	_, err := d.db.Exec(`UPDATE auth SET token = ?, device_id = ? WHERE id = (SELECT id FROM auth LIMIT 1)`,
-		token, deviceID.String(),
+func (d *DB) UpdateToken(deviceID uuid.UUID, deviceType string, token string) error {
+	_, err := d.db.Exec(`UPDATE auth SET token = ?, device_id = ?, device_type = ? WHERE id = (SELECT id FROM auth LIMIT 1)`,
+		token, deviceID.String(), deviceType,
 	)
 	return err
 }

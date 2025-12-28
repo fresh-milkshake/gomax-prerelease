@@ -142,4 +142,7 @@ const (
 	OpcodeFoldersReorder               Opcode = 275
 	OpcodeFoldersDelete                Opcode = 276
 	OpcodeNotifFolders                 Opcode = 277
+	OpcodeGetQR                        Opcode = 288
+	OpcodeGetQRStatus                  Opcode = 289
+	OpcodeLoginByQR                    Opcode = 291
 )

@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/fresh-milkshake/gomax/internal/payloads"
 	"github.com/fresh-milkshake/gomax/internal/utils"
 	"github.com/fresh-milkshake/gomax/types"
+	"github.com/mdp/qrterminal/v3"
 )
 
 // Инициирует авторизацию по номеру телефона:
@@ -56,9 +58,49 @@ func (c *MaxClient) RequestCode(ctx context.Context, phone string, language stri
 	return token, nil
 }
 
+// Повторно запрашивает код подтверждения.
+func (c *MaxClient) ResendCode(ctx context.Context, phone string, language string) (string, error) {
+	pl := payloads.RequestCodePayload{
+		Phone:    phone,
+		Type:     enums.AuthTypeResend,
+		Language: language,
+	}
+	payloadMap, err := utils.ToMap(pl)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := c.sendAndWaitResponse(ctx, enums.OpcodeAuthRequest, payloadMap)
+	if err != nil {
+		return "", err
+	}
+	if err := HandleError(resp); err != nil {
+		return "", err
+	}
+	payload, _ := resp["payload"].(map[string]any)
+	token, _ := payload["token"].(string)
+	if token == "" {
+		return "", fmt.Errorf("token not received")
+	}
+	return token, nil
+}
+
 // Выполняет полный процесс входа: запрашивает код, получает его от пользователя
 // и подтверждает авторизацию, сохраняя выданный токен в локальное хранилище.
 func (c *MaxClient) Login(ctx context.Context) error {
+	// WEB + websocket → QR авторизация
+	if c.cfg.UserAgent.DeviceType == constants.DeviceTypeWeb {
+		if !validateVersion(c.cfg.UserAgent.AppVersion, constants.MinWebQRAppVersion) {
+			return fmt.Errorf("app version %s is below minimum %s for WEB QR login", c.cfg.UserAgent.AppVersion, constants.MinWebQRAppVersion)
+		}
+		authToken, err := c.loginByQR(ctx)
+		if err != nil {
+			return err
+		}
+		c.token = authToken
+		return c.db.UpdateToken(c.deviceID, c.cfg.UserAgent.DeviceType, authToken)
+	}
+
 	tempToken, err := c.RequestCode(ctx, c.cfg.Phone, "ru")
 	if err != nil {
 		return err
@@ -102,6 +144,161 @@ func (c *MaxClient) provideCode(ctx context.Context) (string, error) {
 	return code, nil
 }
 
+// Сравнивает версии вида "25.12.13".
+func validateVersion(version string, minVersion string) bool {
+	parse := func(v string) []int {
+		parts := strings.Split(v, ".")
+		res := make([]int, len(parts))
+		for i, p := range parts {
+			val, _ := strconv.Atoi(p)
+			res[i] = val
+		}
+		return res
+	}
+	a := parse(version)
+	b := parse(minVersion)
+	for i := 0; i < len(a) && i < len(b); i++ {
+		if a[i] > b[i] {
+			return true
+		}
+		if a[i] < b[i] {
+			return false
+		}
+	}
+	return len(a) >= len(b)
+}
+
+// Выполняет QR‑авторизацию для WEB клиентов.
+func (c *MaxClient) loginByQR(ctx context.Context) (string, error) {
+	c.logger.Info("Starting QR login flow")
+
+	// 1. Запрос QR‑данных
+	resp, err := c.sendAndWaitResponse(ctx, enums.OpcodeGetQR, map[string]any{})
+	if err != nil {
+		return "", err
+	}
+	if err := HandleError(resp); err != nil {
+		return "", err
+	}
+	payload, ok := resp["payload"].(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("invalid QR response payload")
+	}
+	pollInterval, ok := asFloat(payload["pollingInterval"])
+	if !ok {
+		return "", fmt.Errorf("invalid pollingInterval in QR payload")
+	}
+	link, ok := payload["qrLink"].(string)
+	if !ok || link == "" {
+		return "", fmt.Errorf("invalid qrLink in QR payload")
+	}
+	trackID, ok := payload["trackId"].(string)
+	if !ok || trackID == "" {
+		return "", fmt.Errorf("invalid trackId in QR payload")
+	}
+	expiresAt, ok := asFloat(payload["expiresAt"])
+	if !ok {
+		return "", fmt.Errorf("invalid expiresAt in QR payload")
+	}
+
+	if pollInterval == 0 || link == "" || trackID == "" || expiresAt == 0 {
+		return "", fmt.Errorf("invalid QR login payload")
+	}
+
+	cfg := qrterminal.Config{
+		Level:      qrterminal.M,
+		Writer:     os.Stdout,
+		BlackChar:  "██",
+		WhiteChar:  "░░", // видимый «пробел», чтобы терминал не обрезал края
+		HalfBlocks: false,
+		QuietZone:  1,
+	}
+	fmt.Println("Scan this QR code to login (or use the link below):")
+	qrterminal.GenerateWithConfig(link, cfg)
+	fmt.Printf("QR link: %s\n", link)
+
+	// 2. Ожидание подтверждения
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(time.Duration(pollInterval) * time.Millisecond):
+		}
+
+		statusResp, err := c.sendAndWaitResponse(ctx, enums.OpcodeGetQRStatus, map[string]any{
+			"trackId": trackID,
+		})
+		if err != nil {
+			return "", err
+		}
+		if err := HandleError(statusResp); err != nil {
+			return "", err
+		}
+
+		statusPayload, ok := statusResp["payload"].(map[string]any)
+		if !ok {
+			continue
+		}
+		status, ok := statusPayload["status"].(map[string]any)
+		if !ok {
+			continue
+		}
+
+		if loginAvailable, _ := status["loginAvailable"].(bool); loginAvailable {
+			// 3. Запрос токена по trackId
+			finalResp, err := c.sendAndWaitResponse(ctx, enums.OpcodeLoginByQR, map[string]any{
+				"trackId": trackID,
+			})
+			if err != nil {
+				return "", err
+			}
+			if err := HandleError(finalResp); err != nil {
+				return "", err
+			}
+			finalPayload, ok := finalResp["payload"].(map[string]any)
+			if !ok {
+				return "", fmt.Errorf("invalid LOGIN_BY_QR payload")
+			}
+			tokenAttrs, ok := finalPayload["tokenAttrs"].(map[string]any)
+			if !ok {
+				return "", fmt.Errorf("LOGIN_BY_QR missing tokenAttrs")
+			}
+			loginData, ok := tokenAttrs[constants.TokenTypeLogin].(map[string]any)
+			if !ok {
+				return "", fmt.Errorf("LOGIN_BY_QR missing LOGIN token")
+			}
+			token, _ := loginData["token"].(string)
+			if token == "" {
+				return "", fmt.Errorf("login token not received in QR flow")
+			}
+			return token, nil
+		}
+
+		nowMs := float64(time.Now().UnixMilli())
+		if expiresAt > 0 && nowMs >= expiresAt {
+			return "", fmt.Errorf("QR code expired")
+		}
+	}
+}
+
+// asFloat аккуратно преобразует int/float64 в float64.
+func asFloat(v any) (float64, bool) {
+	switch t := v.(type) {
+	case float64:
+		return t, true
+	case float32:
+		return float64(t), true
+	case int:
+		return float64(t), true
+	case int64:
+		return float64(t), true
+	case int32:
+		return float64(t), true
+	default:
+		return 0, false
+	}
+}
+
 // Подтверждает код верификации, обновляет auth‑токен клиента
 // и сохраняет его в базе сессии.
 func (c *MaxClient) SendCode(ctx context.Context, code string, token string) error {
@@ -133,7 +330,7 @@ func (c *MaxClient) SendCode(ctx context.Context, code string, token string) err
 	}
 
 	c.token = authToken
-	if err := c.db.UpdateToken(c.deviceID, authToken); err != nil {
+	if err := c.db.UpdateToken(c.deviceID, c.cfg.UserAgent.DeviceType, authToken); err != nil {
 		return err
 	}
 	return nil
@@ -205,7 +402,7 @@ func (c *MaxClient) Register(ctx context.Context, firstName string, lastName *st
 	}
 
 	c.token = authToken
-	return c.db.UpdateToken(c.deviceID, authToken)
+	return c.db.UpdateToken(c.deviceID, c.cfg.UserAgent.DeviceType, authToken)
 }
 
 // Отправляет текстовое сообщение в указанный чат с поддержкой markdown‑форматирования,

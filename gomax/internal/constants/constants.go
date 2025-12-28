@@ -9,15 +9,17 @@ var (
 	WebsocketOrigin              = "https://web.max.ru"
 	Host                         = "api.oneme.ru"
 	Port                     int = 443
-	DefaultTimeout               = 10.0
-	DefaultDeviceType            = "WEB"
+	DefaultTimeout               = 20.0
+	DefaultDeviceType            = "DESKTOP"
 	DefaultLocale                = "ru"
 	DefaultDeviceLocale          = "ru"
 	DefaultDeviceName            = "Chrome"
-	DefaultAppVersion            = "25.10.13"
+	DefaultAppVersion            = "25.12.13"
 	DefaultScreen                = "1080x1920 1.0x"
 	DefaultOSVersion             = "Linux"
 	DefaultUserAgent             = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+	DefaultBuildNumber           = 0x97CB
+	DefaultClientSessionID       = 14
 	DefaultTimezone              = "Europe/Moscow"
 	DefaultChatMembers           = 50
 	DefaultMarker                = 0
@@ -26,6 +28,15 @@ var (
 	DefaultMaxRetries            = 3
 	DefaultRetryInitialDelay     = 1.0
 	DefaultRetryMaxDelay         = 30.0
+
+	// MinWebQRAppVersion минимально допустимая версия приложения для WEB авторизации по QR.
+	MinWebQRAppVersion = "25.12.13"
+
+	// Device types
+	DeviceTypeWeb     = "WEB"
+	DeviceTypeDesktop = "DESKTOP"
+	DeviceTypeAndroid = "ANDROID"
+	DeviceTypeIOS     = "IOS"
 
 	// ProtocolVersion версия протокола WebSocket API Max
 	ProtocolVersion = 11

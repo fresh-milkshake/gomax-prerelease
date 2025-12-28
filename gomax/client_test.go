@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fresh-milkshake/gomax/internal/constants"
 	"github.com/fresh-milkshake/gomax/logger"
 	"github.com/fresh-milkshake/gomax/mockserver"
 
@@ -133,6 +134,86 @@ func TestLogin_EndToEnd(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("code provider was not called")
 	}
+}
+
+// TestLogin_QRFlow проверяет QR‑авторизацию (device_type=WEB).
+func TestLogin_QRFlow(t *testing.T) {
+	t.Parallel()
+	server := mockserver.StartMockServer(t)
+	server.DefaultHandlers()
+
+	const trackID = "track-123"
+	const qrLink = "https://qr.example"
+	const loginToken = "qr_login_token"
+
+	server.SetHandler(mockserver.OpcodeGetQR, func(msg map[string]any) map[string]any {
+		return mockserver.GetQRResponse(int(msg["seq"].(float64)), trackID, qrLink, 100, time.Now().Add(5*time.Second).UnixMilli())
+	})
+	server.SetHandler(mockserver.OpcodeGetQRStatus, func(msg map[string]any) map[string]any {
+		return mockserver.GetQRStatusResponse(int(msg["seq"].(float64)), true, time.Now().Add(5*time.Second).UnixMilli())
+	})
+	server.SetHandler(mockserver.OpcodeLoginByQR, func(msg map[string]any) map[string]any {
+		return mockserver.LoginByQRResponse(int(msg["seq"].(float64)), loginToken)
+	})
+
+	workDir := t.TempDir()
+	client, err := NewMaxClient(ClientConfig{
+		Phone:   testPhone,
+		URI:     server.URL(),
+		WorkDir: workDir,
+		Logger:  logger.Nop(),
+		UserAgent: UserAgent{
+			DeviceType:      constants.DeviceTypeWeb,
+			AppVersion:      constants.MinWebQRAppVersion,
+			HeaderUserAgent: constants.DefaultUserAgent,
+		},
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	ctx := mockserver.TestContext(t)
+	err = client.Start(ctx)
+	require.NoError(t, err)
+
+	// Проверяем, что SYNC отправлен с полученным токеном.
+	msgs := server.GetReceivedMessages()
+	var syncMsg map[string]any
+	for _, m := range msgs {
+		if int(m["opcode"].(float64)) == mockserver.OpcodeLogin {
+			syncMsg = m
+			break
+		}
+	}
+	if syncMsg == nil {
+		t.Fatalf("SYNC not sent after QR login")
+	}
+	payload := syncMsg["payload"].(map[string]any)
+	assert.Equal(t, loginToken, payload["token"])
+}
+
+// TestLogin_QRVersionTooLow проверяет отказ при недостаточной версии для WEB QR.
+func TestLogin_QRVersionTooLow(t *testing.T) {
+	t.Parallel()
+	server := mockserver.StartMockServer(t)
+	server.DefaultHandlers()
+
+	workDir := t.TempDir()
+	client, err := NewMaxClient(ClientConfig{
+		Phone:   testPhone,
+		URI:     server.URL(),
+		WorkDir: workDir,
+		Logger:  logger.Nop(),
+		UserAgent: UserAgent{
+			DeviceType: constants.DeviceTypeWeb,
+			AppVersion: "25.10.13",
+		},
+	})
+	require.NoError(t, err)
+	defer client.Close()
+
+	ctx := mockserver.TestContext(t)
+	err = client.Start(ctx)
+	require.Error(t, err)
 }
 
 // TestRegister_EndToEnd проверяет полный flow регистрации.

@@ -34,4 +34,6 @@ type UserAgentPayload struct {
 	AppVersion      string `json:"appVersion"`
 	Screen          string `json:"screen"`
 	Timezone        string `json:"timezone"`
+	ClientSessionID int    `json:"clientSessionId"`
+	BuildNumber     int    `json:"buildNumber"`
 }
