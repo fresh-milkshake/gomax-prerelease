@@ -1,0 +1,14 @@
+# Cargo output
+/target/
+
+# Go c-shared artifacts if built in-place
+/ffi/libgomax.*
+/ffi/gomax.h
+
+# Editors
+/.idea/
+/.vscode/
+*.iml
+
+# rustfmt/rust-analyzer backups
+**/*.rs.bk
