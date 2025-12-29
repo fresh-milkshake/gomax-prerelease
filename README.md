@@ -1,5 +1,5 @@
 <p align="center">
-    <img src="assets/logo.svg" alt="GoMax" width="400">
+    <img src="gomax/assets/logo.svg" alt="GoMax" width="400">
 </p>
 
 <p align="center">
@@ -9,10 +9,12 @@
 <p align="center">
     <img src="https://img.shields.io/badge/go-1.22+-00ADD8.svg" alt="Go 1.22+">
     <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT">
+    <a href="https://deepwiki.com/fresh-milkshake/gomax-prerelease">
+        <img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki">
+    </a>
 </p>
 
-> [!WARNING] **Дисклеймер**
->
+> [!WARNING]
 > * Это **неофициальная** библиотека для работы с внутренним API Max.
 > * Использование может **нарушать условия предоставления услуг** сервиса.
 > * **Вы используете её исключительно на свой страх и риск.**
